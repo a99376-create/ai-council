@@ -99,6 +99,8 @@ export default {
     if (u.pathname === '/api/overview') return json({ text: OVERVIEW });
     if (u.pathname === '/api/code') return json(await codeSearch(env, b));
     if (u.pathname === '/api/index') return json(await codeIndex(env, b));
+    if (u.pathname.startsWith('/api/saved')) { const st = env.ARCHIVE.get(env.ARCHIVE.idFromName('all'));
+      return st.fetch('https://archive' + u.pathname.replace('/api/saved', ''), { method: 'POST', body: JSON.stringify(b) }); }
     return json({ error: 'לא נמצא' }, 404);
   }
 };
@@ -171,4 +173,17 @@ async function codeIndex(env, b) {
     lines.push(`${f.path} (${L.length} שורות): ${names.join(' ')}`); }
   lines.push(`test/ (${tests.length} קבצי בדיקה): ${tests.join(' ')}`);
   const v = { branch, ref, text: lines.join('\n') }; CACHE.set(k, { t: Date.now(), v }); return v;
+}
+
+// 📜 the discussions, kept so he can come back to one (from the phone or the laptop): one Durable Object with its own SQLite
+export class Archive {
+  constructor(state) { this.sql = state.storage.sql; this.sql.exec('CREATE TABLE IF NOT EXISTS d (id TEXT PRIMARY KEY, ts INTEGER, title TEXT, data TEXT)'); }
+  async fetch(req) { const p = new URL(req.url).pathname, b = await req.json().catch(() => ({}));
+    if (p === '/save') { const id = String(b.id || '').slice(0, 40); if (!id) return json({ error: 'no id' }, 400); const data = JSON.stringify(b.data || {}); if (data.length > 1800000) return json({ error: 'too big' }, 413);
+      this.sql.exec('INSERT INTO d (id, ts, title, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, title = excluded.title, data = excluded.data', id, Date.now(), String(b.title || '').slice(0, 200), data);
+      this.sql.exec('DELETE FROM d WHERE id NOT IN (SELECT id FROM d ORDER BY ts DESC LIMIT 200)'); return json({ ok: true }); }
+    if (p === '/list') return json({ items: this.sql.exec('SELECT id, ts, title FROM d ORDER BY ts DESC LIMIT 100').toArray() });
+    if (p === '/get') { const r = this.sql.exec('SELECT data FROM d WHERE id = ?', String(b.id || '')).toArray()[0]; return r ? json({ data: JSON.parse(r.data) }) : json({ error: 'לא נמצא' }, 404); }
+    if (p === '/delete') { this.sql.exec('DELETE FROM d WHERE id = ?', String(b.id || '')); return json({ ok: true }); }
+    return json({ error: 'לא נמצא' }, 404); }
 }

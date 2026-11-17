@@ -74,6 +74,9 @@
     <div style="height:10px"></div>
     <button id="go">התחל דיון</button>
     <div style="height:8px"></div>
+    <button class="ghost" id="hist">📜 דיונים קודמים</button>
+    <div id="histList"></div>
+    <div style="height:8px"></div>
     <button class="ghost" id="logout">יציאה (לשכוח את הסיסמה במכשיר הזה)</button>
     <div class="note" id="cost" style="margin-top:8px"></div>
   </section>
@@ -98,7 +101,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const NAMES = { openai:'ChatGPT', claude:'Claude', gemini:'Gemini' };
-let PW = '', MODELS = [], LOG = [], ROUND = 0, TASK = '', CTX = {}, RUNNING = false, PENDING = [], WAKE = null, ASKED = new Set();
+let PW = '', MODELS = [], LOG = [], ROUND = 0, TASK = '', CTX = {}, RUNNING = false, PENDING = [], WAKE = null, ASKED = new Set(), DID = '', VIEW = [];
 try { PW = localStorage.getItem('council_pw') || ''; } catch (e) {}
 
 async function api(path, body) {
@@ -133,11 +136,11 @@ $('rounds').onchange = updateCost; $('sum').onchange = updateCost;
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 function card(cls, who, sub) {
-  const d = document.createElement('div'); d.className = 'card msg ' + cls;
+  const d = document.createElement('div'); d.className = 'card msg ' + cls; d.dataset.m = cls; d.dataset.who = who; d.dataset.sub = sub || '';
   d.innerHTML = `<div class="who"><span>${esc(who)}</span><small>${esc(sub || '')}</small></div><div class="txt wait">חושב</div>`;
   $('out').appendChild(d); return d;
 }
-function fill(d, res) {
+function fill(d, res) { if (d.dataset.rec !== '1' && !d.dataset.norec) { d.dataset.rec = '1'; VIEW.push({ k:'msg', m:d.dataset.m, who:d.dataset.who, sub:d.dataset.sub, status:res.status, text:res.text, model:res.model }); }
   const t = d.querySelector('.txt'); t.classList.remove('wait'); t.textContent = res.text || '';
   if (res.status !== 'ok') d.classList.add('err');
   if (res.model) d.querySelector('small').textContent += ' · ' + res.model;
@@ -149,17 +152,35 @@ async function addCode(q, out) {
   try { const r = await api('/api/code', { q, branch: $('branch').value, ref: CTX.ref }); if (r.error) { c.querySelector('span').textContent = '— ' + r.error; c.querySelector('span').className = 'err'; return; }
     CTX.code = ((CTX.code || '') + '\n\n' + (r.text || '')).slice(-100000); c.innerHTML = `<details><summary><b>📎 עוד קוד שצורף</b> (ענף ${r.branch}) — ${r.text ? Math.round(r.text.length / 1000) + 'KB' : (r.note || 'לא נמצא')} (לחצו לראות)</summary><pre style="white-space:pre-wrap;direction:ltr;text-align:left;font-size:12px;max-height:50vh;overflow:auto"></pre></details>`; c.querySelector('pre').textContent = r.text || ''; }
   catch (e) { c.querySelector('span').textContent = '— ' + e.message; } }
-function userCard(text, note) { const u = document.createElement('div'); u.className = 'card'; u.style.background = '#fffbea'; u.innerHTML = '<b>אתה:</b> <small class="note"></small><div class="txt" style="white-space:pre-wrap"></div>'; u.querySelector('small').textContent = note || ''; u.querySelector('.txt').textContent = text; $('out').appendChild(u); return u; }
+function userCard(text, note) { VIEW.push({ k:'msg', m:'user', text }); const u = document.createElement('div'); u.className = 'card'; u.style.background = '#fffbea'; u.innerHTML = '<b>אתה:</b> <small class="note"></small><div class="txt" style="white-space:pre-wrap"></div>'; u.querySelector('small').textContent = note || ''; u.querySelector('.txt').textContent = text; $('out').appendChild(u); return u; }
 // the models ask for code themselves: a line [[קוד: name]] in an answer → fetched and attached before the next round
 async function fetchAsked(from) { const want = []; for (const x of LOG.slice(from)) { if (x.model === 'user') continue; for (const m of String(x.text).matchAll(/\[\[\s*(?:קוד|code)\s*:\s*([^\]\n]+)\]\]/gi)) for (const n of m[1].split(/[,،]/)) { const k = n.trim(); if (k && !ASKED.has(k)) { ASKED.add(k); want.push(k); } } }
-  if (want.length) { const h = document.createElement('div'); h.className = 'note'; h.textContent = '🔎 המודלים ביקשו קוד: ' + want.join(', '); $('out').appendChild(h); await addCode(want.join('\n'), $('out')); } }
+  if (want.length) { note('🔎 המודלים ביקשו קוד: ' + want.join(', ')); await addCode(want.join('\n'), $('out')); } }
 // what he wrote while a round was running goes into the discussion before the next round
 async function flushPending() { while (PENDING.length) { const p = PENDING.shift(); if (p.card) p.card.querySelector('small').textContent = '— נכנס לדיון'; else userCard(p.text, ''); if (p.code) await addCode(p.code, $('out')); LOG.push({ model:'user', round:'הערה', text:p.text }); } }
+
+// 📜 every discussion is kept (on the server — the phone and the laptop see the same list) and can be opened again and continued
+function note(text) { const h = document.createElement('div'); h.className = 'note'; h.textContent = text; $('out').appendChild(h); VIEW.push({ k:'note', text }); }
+function roundHead(text) { const h = document.createElement('div'); h.className = 'round'; h.textContent = text; $('out').appendChild(h); VIEW.push({ k:'round', text }); }
+async function save() { if (!DID || !TASK) return; try { await api('/api/saved/save', { id: DID, title: TASK.slice(0, 120), data: { TASK, LOG, CTX, ROUND, ASKED: [...ASKED], VIEW, ts: Date.now() } }); } catch (e) {} }
+function renderSaved(d) { $('out').innerHTML = ''; VIEW = [];
+  const q = document.createElement('div'); q.className = 'card'; q.innerHTML = '<b>השאלה:</b><div class="txt" style="white-space:pre-wrap"></div>'; q.querySelector('.txt').textContent = d.TASK; $('out').appendChild(q);
+  for (const v of (d.VIEW && d.VIEW.length ? d.VIEW : (d.LOG || []).map(x => ({ k:'msg', m:x.model, round:x.round, text:x.text })))) {
+    if (v.k === 'round') roundHead(v.text); else if (v.k === 'note') note(v.text);
+    else if (v.m === 'user') userCard(v.text, '');
+    else { const d2 = card(v.m === 'sum' ? 'sum' : v.m, v.who || NAMES[v.m] || v.m, v.sub || (typeof v.round === 'number' ? 'סבב ' + v.round : String(v.round || ''))); fill(d2, { status: v.status || 'ok', text: v.text, model: v.model }); } } }
+$('hist').onclick = async () => { const box = $('histList'); if (box.innerHTML) { box.innerHTML = ''; return; } box.innerHTML = '<div class="note">טוען…</div>';
+  try { const r = await api('/api/saved/list'); if (!r.items.length) { box.innerHTML = '<div class="note">עוד אין דיונים שמורים.</div>'; return; }
+    box.innerHTML = ''; for (const it of r.items) { const a = document.createElement('a'); a.href = '#'; a.style.cssText = 'display:block;padding:8px 2px;border-bottom:1px solid var(--line)';
+      a.textContent = new Date(it.ts).toLocaleString('he-IL', { day:'numeric', month:'numeric', hour:'2-digit', minute:'2-digit' }) + ' · ' + it.title; box.appendChild(a);
+      a.onclick = async e => { e.preventDefault(); try { const g = await api('/api/saved/get', { id: it.id }); const d = g.data; DID = it.id; TASK = d.TASK; LOG = d.LOG || []; CTX = d.CTX || {}; ROUND = d.ROUND || 0; ASKED = new Set(d.ASKED || []);
+        $('task').value = TASK; renderSaved(d); box.innerHTML = ''; $('again').classList.remove('hide'); $('fab').classList.remove('hide'); $('replyNote').textContent = 'הדיון נפתח מחדש — אפשר להמשיך אותו עם תגובה.'; $('out').scrollIntoView(); } catch (x) { alert(x.message); } }; } }
+  catch (e) { box.innerHTML = '<div class="err">' + esc(e.message) + '</div>'; } };
 $('go').onclick = async () => {
   const task = $('task').value.trim(); if (task.length < 3) { $('task').focus(); return; }
   const rounds = +$('rounds').value, sumBy = $('sum').value, live = MODELS.filter(m => m.ready).map(m => m.id);
   if (!live.length) { alert('אף מודל עוד לא מחובר — חסרים מפתחות API.'); return; }
-  $('go').disabled = true; $('out').innerHTML = ''; LOG = []; TASK = task; RUNNING = true; PENDING = []; ASKED = new Set();
+  $('go').disabled = true; $('out').innerHTML = ''; LOG = []; TASK = task; RUNNING = true; PENDING = []; ASKED = new Set(); VIEW = []; DID = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   $('again').classList.remove('hide'); $('fab').classList.remove('hide'); $('replyNote').textContent = 'אפשר לכתוב כבר עכשיו — מה שתשלח ייכנס לדיון לפני הסבב הבא.';
   CTX = { withApp: $('withApp').checked ? 1 : 0, code: '', index: '', ref: '' };
   // the whole discussion reads ONE version of the code: the branch's commit right now
@@ -177,22 +198,23 @@ $('go').onclick = async () => {
       if (r > 1 && $('pause').checked && !PENDING.length) { $('cont').classList.remove('hide'); $('replyNote').textContent = '⏸ המועצה מחכה לך: כתוב תגובה ושלח, או לחץ "להמשיך".'; $('reply').scrollIntoView({ behavior:'smooth', block:'center' });
         await new Promise(res => { WAKE = res; }); WAKE = null; $('cont').classList.add('hide'); $('replyNote').textContent = 'אפשר לכתוב כבר עכשיו — מה שתשלח ייכנס לדיון לפני הסבב הבא.'; }
       await flushPending();
-      const h = document.createElement('div'); h.className = 'round'; h.textContent = r === 1 ? 'סבב 1 — כל אחד מציע' : `סבב ${r} — מגיבים זה לזה`; $('out').appendChild(h);
+      roundHead(r === 1 ? 'סבב 1 — כל אחד מציע' : `סבב ${r} — מגיבים זה לזה`);
       const history = LOG.slice(), from = LOG.length;
       await Promise.all(live.map(async m => {
         const d = card(m, NAMES[m], 'סבב ' + r);
         let res; try { res = await api('/api/ask', { model:m, task, round:r, rounds, history, ...CTX }); } catch (e) { res = { status:'error', text:e.message }; }
         fill(d, res); if (res.status === 'ok') LOG.push({ model:m, round:r, text:res.text });
       }));
-      ROUND = r; await fetchAsked(from);
+      ROUND = r; await fetchAsked(from); await save();
     }
     await flushPending();
     if (sumBy && LOG.length) {
-      const h = document.createElement('div'); h.className = 'round'; h.textContent = 'סיכום'; $('out').appendChild(h);
+      roundHead('סיכום');
       const by = live.includes(sumBy) ? sumBy : live[0], d = card('sum', 'סיכום — ' + NAMES[by], '');
       let res; try { res = await api('/api/ask', { model:by, task, summary:1, history:LOG, ...CTX }); } catch (e) { res = { status:'error', text:e.message }; }
       fill(d, res); if (res.status === 'ok') LOG.push({ model:by, round:'סיכום', text:res.text });
     }
+    await save();
   } finally { RUNNING = false; $('go').disabled = false; $('again').classList.remove('hide'); $('fab').classList.remove('hide'); $('replyNote').textContent = ''; if (PENDING.length) { const p = PENDING.splice(0); $('reply').value = p.map(x => x.text).join('\n'); } }
 };
 
@@ -200,12 +222,13 @@ $('cont').onclick = () => { if (WAKE) WAKE(); };
 $('send').onclick = async () => {
   const text = $('reply').value.trim(); if (text.length < 2 || !TASK) { $('reply').focus(); return; }
   if (RUNNING) { const card = userCard(text, '— ייכנס לדיון לפני הסבב הבא'); PENDING.push({ text, code: $('moreCode').value.trim(), card }); $('reply').value = ''; $('moreCode').value = ''; if (WAKE) WAKE(); return; }
+  if (!DID) DID = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const live = MODELS.filter(m => m.ready).map(m => m.id); $('send').disabled = true; $('go').disabled = true;
-  const out = $('out'), h = document.createElement('div'); h.className = 'round'; h.textContent = 'התגובה שלך'; out.appendChild(h);
+  const out = $('out'); roundHead('התגובה שלך');
   userCard(text, '');
   const mc = $('moreCode').value.trim(); if (mc) await addCode(mc, out);
   const history = LOG.slice(); LOG.push({ model:'user', round:'תגובה', text }); ROUND++; const from = LOG.length;
-  const h2 = document.createElement('div'); h2.className = 'round'; h2.textContent = 'המועצה עונה לך'; out.appendChild(h2);
+  roundHead('המועצה עונה לך');
   // the answers go above the reply box, so the box stays at the bottom
   try {
     await Promise.all(live.map(async m => {
@@ -213,7 +236,7 @@ $('send').onclick = async () => {
       let res; try { res = await api('/api/ask', { model:m, task:TASK, reply:text, history, ...CTX }); } catch (e) { res = { status:'error', text:e.message }; }
       fill(d, res); if (res.status === 'ok') LOG.push({ model:m, round:ROUND, text:res.text });
     }));
-    await fetchAsked(from);
+    await fetchAsked(from); await save();
   } finally { $('send').disabled = false; $('go').disabled = false; $('reply').value = ''; $('moreCode').value = ''; }
 };
 $('copy').onclick = async () => {

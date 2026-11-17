@@ -5,6 +5,15 @@ compatibility_date = "2026-11-01"
 account_id = "4c505a604c33511cea5c1637e52cd3fc"
 workers_dev = true
 
+# 📜 saved discussions
+[[durable_objects.bindings]]
+name = "ARCHIVE"
+class_name = "Archive"
+
+[[migrations]]
+tag = "v1-archive"
+new_sqlite_classes = ["Archive"]
+
 [[rules]]
 type = "Text"
 globs = ["**/*.md"]
