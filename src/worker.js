@@ -11,7 +11,7 @@ const SYSTEM = 'אתה חבר במועצת AI שדנה בגלוי בשאלה ש�
   'בסבב הראשון הצע תשובה או תוכנית משלך. בסבבים הבאים קרא את מה שכתבו האחרים, ציין במפורש במה אתה מסכים ובמה לא ולמה, ושפר. ' +
   'אל תעמיד פנים שביצעת פעולות שלא ביצעת, ואל תמציא עובדות; אם אינך בטוח — אמור זאת.';
 const NAMES = { openai: 'ChatGPT', claude: 'Claude', gemini: 'Gemini' }, WHO = { ...NAMES, user: 'המשתמש' };
-const MAX_TOKENS = 1500, MAX_TASK = 12000, MAX_HIST_EACH = 4000, MAX_CODE = 40000;
+const MAX_TOKENS = 1500, MAX_TASK = 12000, MAX_HIST_EACH = 4000, MAX_CODE = 70000;
 
 const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
@@ -110,25 +110,43 @@ async function gh(env, path, raw) {
 }
 async function codeSearch(env, b) {
   if (!env.GITHUB_TOKEN) return { error: 'עוד לא חובר מפתח של GitHub — אי אפשר לקרוא את הקוד.' };
-  const q = String(b.q || '').trim().slice(0, 200); if (!q) return { error: 'מה לחפש בקוד?' };
-  let tree; try { tree = await gh(env, '/git/trees/main?recursive=1'); } catch (e) { return { error: String(e.message) }; }
+  // several requests at once: one per line (or separated by ;). "wPlan" that names a function → the whole function.
+  // a line "@branch" (e.g. @v221-alleys) reads that branch instead of main.
+  let branch = 'main'; const reqs = [];
+  for (let l of String(b.q || '').split(/\n|;/)) { l = l.replace(/^\s*\d+[.)]\s*/, '').replace(/[`'"“”]/g, ' ').trim(); if (!l) continue;
+    const m = l.match(/(^|\s)@([\w.\/-]+)/); if (m) { branch = m[2]; l = l.replace(m[0], ' ').trim(); } if (l) reqs.push(l.slice(0, 200)); }
+  if (b.branch) branch = String(b.branch).replace(/[^\w.\/-]/g, '') || 'main';
+  if (!reqs.length) return { error: 'מה לחפש בקוד?' };
+  let tree; try { tree = await gh(env, '/git/trees/' + encodeURIComponent(branch) + '?recursive=1'); } catch (e) { return { error: String(e.message) + ' (ענף ' + branch + ')' }; }
   const all = (tree.tree || []).filter(f => f.type === 'blob' && /\.(js|mjs|html|css|toml|sql|md|json)$/.test(f.path) && !/\.gen\.js$|^site\/vendor\/|package-lock|^CHANGES-/.test(f.path));
-  const words = q.split(/\s+/).filter(Boolean);
-  // a file name or path given → that file; else the main source files are searched for every word
-  const named = all.filter(f => words.some(w => f.path === w || f.path.endsWith('/' + w)));
-  const files = named.length ? named : all.filter(f => /^(site|src)\//.test(f.path) && f.size < 1200000);
-  const out = []; let size = 0, hits = 0;
-  for (const f of files.slice(0, 30)) {
-    let txt; try { txt = await gh(env, '/contents/' + encodeURI(f.path) + '?ref=main', true); } catch (e) { continue; }
-    const L = txt.split('\n');
-    if (named.length && txt.length <= 30000) { const piece = `### ${f.path} (כל הקובץ)\n` + txt; out.push(piece); size += piece.length; continue; }
-    const terms = named.length ? words.filter(w => !named.some(n => n.path.endsWith(w))) : words; if (!terms.length) { out.push(`### ${f.path}: הקובץ גדול מדי לצרף כולו (${Math.round(txt.length / 1000)}KB) — כתבו גם מילה לחפש בו`); continue; }
-    const lc = terms.map(w => w.toLowerCase()), marks = [];
-    L.forEach((l, i) => { const x = l.toLowerCase(); if (lc.every(w => x.includes(w)) || (lc.length > 1 && lc.filter(w => x.includes(w)).length >= 2)) marks.push(i); });
-    if (!marks.length) continue; hits += marks.length;
-    const R = []; for (const i of marks.slice(0, 12)) { const a = Math.max(0, i - 10), z = Math.min(L.length - 1, i + 14); if (R.length && a <= R[R.length - 1][1] + 1) R[R.length - 1][1] = z; else R.push([a, z]); }
-    for (const [a, z] of R) { const piece = `### ${f.path} שורות ${a + 1}–${z + 1}\n` + L.slice(a, z + 1).map(l => l.length > 400 ? l.slice(0, 400) + ' …' : l).join('\n'); if (size + piece.length > MAX_CODE) break; out.push(piece); size += piece.length; }
-    if (size > MAX_CODE) break;
+  const src = all.filter(f => /^(site|src|tools)\//.test(f.path) || /^(schema\.sql|wrangler\.toml)$/.test(f.path));
+  const read = async f => { try { return await gh(env, '/contents/' + encodeURI(f.path) + '?ref=' + encodeURIComponent(branch), true); } catch (e) { return null; } };
+  const out = [], seen = new Set(); let size = 0, hits = 0; const room = () => MAX_CODE - size;
+  const push = (head, body) => { const k = head; if (seen.has(k)) return; seen.add(k); const piece = `### ${head}\n` + body; if (piece.length > room()) { out.push(`### ${head}: (דולג — נגמר המקום, ${Math.round(piece.length / 1000)}KB)`); return; } out.push(piece); size += piece.length; };
+  const clip = l => l.length > 400 ? l.slice(0, 400) + ' …' : l;
+  for (const q of reqs) {
+    const words = q.split(/\s+/).map(w => w.replace(/^[^\w$\/]+|[^\w$]+$/g, '')).filter(w => w.length > 1 && /[A-Za-z$_]/.test(w) && !/^(the|and|of|in|כל|את|של|ה|ו|או|אם|רלוונטי|המקומות|שבהם|מופיע|הפונקציה|ההגדרה|והשימוש|ב|הקוד|שבוחר|מבנה|נתוני)$/.test(w));
+    const named = src.filter(f => words.some(w => f.path === w || f.path.endsWith('/' + w)));
+    const terms = words.filter(w => !named.some(n => n.path === w || n.path.endsWith('/' + w)));
+    const files = named.length ? named : src.filter(f => f.size < 1500000);
+    for (const f of files.slice(0, 40)) {
+      if (room() < 500) break; const txt = await read(f); if (txt == null) continue; const L = txt.split('\n');
+      if (named.length && !terms.length) { if (txt.length <= 30000) push(`${f.path} (כל הקובץ)`, txt); else push(`${f.path}`, `הקובץ גדול (${Math.round(txt.length / 1000)}KB) — כתבו גם מילה או שם פונקציה לחפש בו`); continue; }
+      for (const w of terms) {
+        // a function / constant / table by that name → its whole definition
+        const defRx = new RegExp('^\\s*(async\\s+)?function\\s+' + w.replace(/[^\w$]/g, '') + '\\s*\\(|^\\s*(const|let)\\s+[^=]*\\b' + w.replace(/[^\w$]/g, '') + '\\s*=|CREATE TABLE IF NOT EXISTS ' + w.replace(/[^\w$]/g, '') + '\\b');
+        const d = /^[\w$]{3,}$/.test(w) ? L.findIndex(l => defRx.test(l)) : -1;
+        if (d >= 0 && /function|CREATE TABLE/.test(L[d])) { let z = d; const top = /^\S/.test(L[d]);
+          const tbl = /CREATE TABLE/.test(L[d]);
+          for (let i = d + 1; i < L.length && i < d + 400; i++) { if (tbl) { z = i; if (/\)\s*;|\)`|`\s*,\s*$/.test(L[i]) || /\)\s*[`'"]?\s*[,;]?\s*$/.test(L[i]) && /^\s*\)/.test(L[i])) break; if (i > d + 60) break; continue; }
+            if (top && /^(async\s+)?function\s|^(const|let|var)\s|^\/\/ v\d|^export\s/.test(L[i])) break; z = i; if (!top && i > d + 150) break; }
+          push(`${f.path} — ההגדרה של ${w} (שורות ${d + 1}–${z + 1})`, L.slice(Math.max(0, d - 6), z + 1).map(clip).join('\n')); hits++; }
+        const lw = w.toLowerCase(), marks = []; L.forEach((l, i) => { if (l.toLowerCase().includes(lw) && i !== d) marks.push(i); });
+        if (!marks.length) continue; hits += marks.length;
+        const R = []; for (const i of marks.slice(0, 15)) { const a = Math.max(0, i - 6), z = Math.min(L.length - 1, i + 8); if (R.length && a <= R[R.length - 1][1] + 1) R[R.length - 1][1] = z; else R.push([a, z]); }
+        for (const [a, z] of R) push(`${f.path} שורות ${a + 1}–${z + 1} ("${w}")`, L.slice(a, z + 1).map(clip).join('\n'));
+      }
+    }
   }
-  return { files: files.length, hits, text: out.join('\n\n') || '', note: out.length ? '' : 'לא נמצא בקוד' };
+  return { branch, files: src.length, hits, text: out.join('\n\n'), note: out.length ? '' : 'לא נמצא בקוד' };
 }

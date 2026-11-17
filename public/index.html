@@ -66,7 +66,8 @@
     </div>
     <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="checkbox" id="withApp" checked style="width:auto"> 📘 לצרף את סקירת האפליקציה (חבורת מזכי הרבים) <a href="#" id="readOv" style="margin-inline-start:auto;font-size:14px">לקרוא</a></label>
     <label for="codeQ">🔎 קוד מהאפליקציה לצרף לדיון (לא חובה)</label>
-    <input id="codeQ" placeholder="מילים לחיפוש בקוד, או שם קובץ — למשל: WALK_GAP_MAX_KM  או  site/walk.js harvest">
+    <textarea id="codeQ" style="min-height:70px;direction:ltr;text-align:left" placeholder="כל שורה = בקשה. שם פונקציה מביא את כולה. למשל:&#10;wPlan&#10;harvest&#10;site/walk.js"></textarea>
+    <div class="row"><div><label for="branch" style="font-weight:400">מאיזה ענף לקרוא</label><select id="branch"><option value="main">main — מה שבאוויר</option><option value="v221-alleys">v221-alleys — הניסוי של הסמטאות</option></select></div></div>
     <div class="chips" id="chips"></div>
     <div style="height:10px"></div>
     <button id="go">התחל דיון</button>
@@ -143,8 +144,8 @@ $('go').onclick = async () => {
   CTX = { withApp: $('withApp').checked ? 1 : 0, code: '' };
   const cq = $('codeQ').value.trim();
   if (cq) { const c = document.createElement('div'); c.className = 'card'; c.innerHTML = '<b>📎 קוד מהאפליקציה</b> <span class="wait">מחפש</span>'; $('out').appendChild(c);
-    try { const r = await api('/api/code', { q: cq }); if (r.error) { c.querySelector('span').textContent = '— ' + r.error; c.querySelector('span').className = 'err'; }
-      else { CTX.code = r.text || ''; c.innerHTML = `<details><summary><b>📎 קוד שצורף לדיון</b> — ${r.text ? Math.round(r.text.length / 1000) + 'KB' : (r.note || 'לא נמצא')} (לחצו לראות)</summary><pre style="white-space:pre-wrap;direction:ltr;text-align:left;font-size:12px;max-height:50vh;overflow:auto"></pre></details>`; c.querySelector('pre').textContent = r.text || ''; } }
+    try { const r = await api('/api/code', { q: cq, branch: $('branch').value }); if (r.error) { c.querySelector('span').textContent = '— ' + r.error; c.querySelector('span').className = 'err'; }
+      else { CTX.code = r.text || ''; c.innerHTML = `<details><summary><b>📎 קוד שצורף לדיון</b> (ענף ${r.branch}) — ${r.text ? Math.round(r.text.length / 1000) + 'KB' : (r.note || 'לא נמצא')} (לחצו לראות)</summary><pre style="white-space:pre-wrap;direction:ltr;text-align:left;font-size:12px;max-height:50vh;overflow:auto"></pre></details>`; c.querySelector('pre').textContent = r.text || ''; } }
     catch (e) { c.querySelector('span').textContent = '— ' + e.message; } }
   const q = document.createElement('div'); q.className = 'card'; q.innerHTML = '<b>השאלה:</b><div class="txt" style="white-space:pre-wrap"></div>'; q.querySelector('.txt').textContent = task; $('out').appendChild(q);
   try {
