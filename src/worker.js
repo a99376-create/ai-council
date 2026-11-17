@@ -56,8 +56,10 @@ async function call1(env, m, prompt, modelOverride) {
       return { status: 'ok', text: t || '(לא התקבל טקסט)', model };
     }
     if (m === 'claude') {
-      r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model, max_tokens: MAX_TOKENS, system: SYSTEM, messages: [{ role: 'user', content: prompt }] }) });
+      // the key goes as a bearer token (newer keys, sk-ant-usr…, expect it); the older x-api-key header is tried once if that is refused
+      const body = JSON.stringify({ model, max_tokens: MAX_TOKENS, system: SYSTEM, messages: [{ role: 'user', content: prompt }] }), base = { 'anthropic-version': '2023-06-01', 'content-type': 'application/json' };
+      r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { ...base, authorization: 'Bearer ' + key }, body });
+      if (r.status === 401) r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { ...base, 'x-api-key': key }, body });
       j = await r.json().catch(() => ({}));
       if (!r.ok) return { status: 'error', busy: busy(r.status), text: 'שגיאה מ-Anthropic (' + r.status + '): ' + String(j.error && j.error.message || '').slice(0, 300) };
       return { status: 'ok', text: (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n') || '(לא התקבל טקסט)', model };
