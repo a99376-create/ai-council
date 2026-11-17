@@ -5,6 +5,11 @@ compatibility_date = "2026-11-01"
 account_id = "4c505a604c33511cea5c1637e52cd3fc"
 workers_dev = true
 
+[[rules]]
+type = "Text"
+globs = ["**/*.md"]
+fallthrough = true
+
 [assets]
 directory = "public"
 binding = "ASSETS"

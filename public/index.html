@@ -64,6 +64,9 @@
       <div><label for="sum">סיכום בסוף</label>
         <select id="sum"><option value="claude">Claude מסכם</option><option value="openai">ChatGPT מסכם</option><option value="gemini">Gemini מסכם</option><option value="">בלי סיכום</option></select></div>
     </div>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="checkbox" id="withApp" checked style="width:auto"> 📘 לצרף את סקירת האפליקציה (חבורת מזכי הרבים) <a href="#" id="readOv" style="margin-inline-start:auto;font-size:14px">לקרוא</a></label>
+    <label for="codeQ">🔎 קוד מהאפליקציה לצרף לדיון (לא חובה)</label>
+    <input id="codeQ" placeholder="מילים לחיפוש בקוד, או שם קובץ — למשל: WALK_GAP_MAX_KM  או  site/walk.js harvest">
     <div class="chips" id="chips"></div>
     <div style="height:10px"></div>
     <button id="go">התחל דיון</button>
@@ -86,7 +89,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const NAMES = { openai:'ChatGPT', claude:'Claude', gemini:'Gemini' };
-let PW = '', MODELS = [], LOG = [], ROUND = 0, TASK = '';
+let PW = '', MODELS = [], LOG = [], ROUND = 0, TASK = '', CTX = {};
 try { PW = localStorage.getItem('council_pw') || ''; } catch (e) {}
 
 async function api(path, body) {
@@ -114,6 +117,7 @@ function updateCost() {
   const n = MODELS.filter(m => m.ready).length, r = +$('rounds').value, s = $('sum').value ? 1 : 0;
   $('cost').textContent = n ? `הדיון ישלח ${n * r + s} בקשות למודלים (כל בקשה עולה כמה סנטים לכל היותר, לפי החשבון שלך אצל כל חברה).` : 'אף מודל עוד לא מחובר — חסרים מפתחות API.';
 }
+$('readOv').onclick = async e => { e.preventDefault(); try { const r = await api('/api/overview'); const d = document.createElement('div'); d.className = 'card'; d.innerHTML = '<b>📘 סקירת האפליקציה</b> <a href="#" style="float:left">סגור</a><div class="txt" style="white-space:pre-wrap;margin-top:8px"></div>'; d.querySelector('.txt').textContent = r.text; d.querySelector('a').onclick = ev => { ev.preventDefault(); d.remove(); }; $('out').prepend(d); d.scrollIntoView(); } catch (x) { alert(x.message); } };
 $('logout').onclick = () => { try { localStorage.removeItem('council_pw'); } catch (e) {} PW = ''; location.reload(); };
 $('rounds').onchange = updateCost; $('sum').onchange = updateCost;
 
@@ -134,6 +138,12 @@ $('go').onclick = async () => {
   const rounds = +$('rounds').value, sumBy = $('sum').value, live = MODELS.filter(m => m.ready).map(m => m.id);
   if (!live.length) { alert('אף מודל עוד לא מחובר — חסרים מפתחות API.'); return; }
   $('go').disabled = true; $('out').innerHTML = ''; $('again').classList.add('hide'); LOG = []; TASK = task;
+  CTX = { withApp: $('withApp').checked ? 1 : 0, code: '' };
+  const cq = $('codeQ').value.trim();
+  if (cq) { const c = document.createElement('div'); c.className = 'card'; c.innerHTML = '<b>📎 קוד מהאפליקציה</b> <span class="wait">מחפש</span>'; $('out').appendChild(c);
+    try { const r = await api('/api/code', { q: cq }); if (r.error) { c.querySelector('span').textContent = '— ' + r.error; c.querySelector('span').className = 'err'; }
+      else { CTX.code = r.text || ''; c.innerHTML = `<details><summary><b>📎 קוד שצורף לדיון</b> — ${r.text ? Math.round(r.text.length / 1000) + 'KB' : (r.note || 'לא נמצא')} (לחצו לראות)</summary><pre style="white-space:pre-wrap;direction:ltr;text-align:left;font-size:12px;max-height:50vh;overflow:auto"></pre></details>`; c.querySelector('pre').textContent = r.text || ''; } }
+    catch (e) { c.querySelector('span').textContent = '— ' + e.message; } }
   const q = document.createElement('div'); q.className = 'card'; q.innerHTML = '<b>השאלה:</b><div class="txt" style="white-space:pre-wrap"></div>'; q.querySelector('.txt').textContent = task; $('out').appendChild(q);
   try {
     for (let r = 1; r <= rounds; r++) {
@@ -141,7 +151,7 @@ $('go').onclick = async () => {
       const history = LOG.slice();
       await Promise.all(live.map(async m => {
         const d = card(m, NAMES[m], 'סבב ' + r);
-        let res; try { res = await api('/api/ask', { model:m, task, round:r, rounds, history }); } catch (e) { res = { status:'error', text:e.message }; }
+        let res; try { res = await api('/api/ask', { model:m, task, round:r, rounds, history, ...CTX }); } catch (e) { res = { status:'error', text:e.message }; }
         fill(d, res); if (res.status === 'ok') LOG.push({ model:m, round:r, text:res.text });
       }));
       ROUND = r;
@@ -149,7 +159,7 @@ $('go').onclick = async () => {
     if (sumBy && LOG.length) {
       const h = document.createElement('div'); h.className = 'round'; h.textContent = 'סיכום'; $('out').appendChild(h);
       const by = live.includes(sumBy) ? sumBy : live[0], d = card('sum', 'סיכום — ' + NAMES[by], '');
-      let res; try { res = await api('/api/ask', { model:by, task, summary:1, history:LOG }); } catch (e) { res = { status:'error', text:e.message }; }
+      let res; try { res = await api('/api/ask', { model:by, task, summary:1, history:LOG, ...CTX }); } catch (e) { res = { status:'error', text:e.message }; }
       fill(d, res); if (res.status === 'ok') LOG.push({ model:by, round:'סיכום', text:res.text });
     }
   } finally { $('go').disabled = false; $('again').classList.remove('hide'); }
@@ -166,7 +176,7 @@ $('send').onclick = async () => {
   try {
     await Promise.all(live.map(async m => {
       const d = card(m, NAMES[m], 'תשובה לתגובה');
-      let res; try { res = await api('/api/ask', { model:m, task:TASK, reply:text, history }); } catch (e) { res = { status:'error', text:e.message }; }
+      let res; try { res = await api('/api/ask', { model:m, task:TASK, reply:text, history, ...CTX }); } catch (e) { res = { status:'error', text:e.message }; }
       fill(d, res); if (res.status === 'ok') LOG.push({ model:m, round:ROUND, text:res.text });
     }));
   } finally { $('send').disabled = false; $('go').disabled = false; $('reply').value = ''; }

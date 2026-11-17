@@ -5,11 +5,13 @@
 //   POST /api/ask     {model, task, round, rounds, history[]}   → {text} from that model
 //   header x-council-password = the COUNCIL_PASSWORD secret (no password set → everything is refused)
 
+import OVERVIEW from '../docs/app-overview.md';
+const REPO = 'a99376-create/mezakeharabim-app';
 const SYSTEM = 'אתה חבר במועצת AI שדנה בגלוי בשאלה של המשתמש, יחד עם שני מודלים אחרים. ענה בעברית, בצורה ממוקדת ומעשית. ' +
   'בסבב הראשון הצע תשובה או תוכנית משלך. בסבבים הבאים קרא את מה שכתבו האחרים, ציין במפורש במה אתה מסכים ובמה לא ולמה, ושפר. ' +
   'אל תעמיד פנים שביצעת פעולות שלא ביצעת, ואל תמציא עובדות; אם אינך בטוח — אמור זאת.';
 const NAMES = { openai: 'ChatGPT', claude: 'Claude', gemini: 'Gemini' }, WHO = { ...NAMES, user: 'המשתמש' };
-const MAX_TOKENS = 1200, MAX_TASK = 12000, MAX_HIST_EACH = 4000;
+const MAX_TOKENS = 1500, MAX_TASK = 12000, MAX_HIST_EACH = 4000, MAX_CODE = 40000;
 
 const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
@@ -28,7 +30,10 @@ function tooMany(ip) { const m = Math.floor(Date.now() / 60000), k = ip + '|' + 
 function modelOf(env, m) { return m === 'openai' ? (env.OPENAI_MODEL || 'gpt-5.6-terra') : m === 'claude' ? (env.ANTHROPIC_MODEL || 'claude-sonnet-5-5') : (env.GEMINI_MODEL || 'gemini-3.8-flash'); }
 function keyOf(env, m) { const k = m === 'openai' ? env.OPENAI_API_KEY : m === 'claude' ? env.ANTHROPIC_API_KEY : env.GEMINI_API_KEY; return String(k || '').replace(/[\s"'`]+/g, ''); } // a pasted key may carry spaces, a line break or quotes
 
-function promptOf(b) {
+function ctxOf(b) { let c = ''; if (b.withApp) c += 'רקע — סקירת האפליקציה שהמשתמש מפתח (חבורת מזכי הרבים):\n' + OVERVIEW + '\n\n';
+  if (b.code) c += 'קטעי קוד מהאפליקציה שצורפו לדיון (מקור: GitHub, ענף main):\n' + String(b.code).slice(0, MAX_CODE) + '\n\n'; return c; }
+function promptOf(b) { return ctxOf(b) + promptOf0(b); }
+function promptOf0(b) {
   const task = String(b.task || '').slice(0, MAX_TASK), round = Math.max(1, Math.min(4, +b.round || 1)), rounds = Math.max(1, Math.min(4, +b.rounds || 3));
   const hist = (Array.isArray(b.history) ? b.history : []).filter(h => h && h.text).slice(-16)
     .map(h => `— ${WHO[h.model] || h.model}${h.model === 'user' ? '' : ' (סבב ' + (+h.round || '?') + ')'}:\n${String(h.text).slice(0, MAX_HIST_EACH)}`).join('\n\n');
@@ -88,6 +93,41 @@ export default {
       if (String(b.task || '').trim().length < 3) return json({ error: 'השאלה קצרה מדי' }, 400);
       return json(await call(env, b.model, promptOf(b)));
     }
+    if (u.pathname === '/api/overview') return json({ text: OVERVIEW });
+    if (u.pathname === '/api/code') return json(await codeSearch(env, b));
     return json({ error: 'לא נמצא' }, 404);
   }
 };
+
+// 🔎 code from the app's repository (read-only; GITHUB_TOKEN = a fine-grained token with "Contents: read" on that one repository)
+const CACHE = new Map(); const TTL = 10 * 60 * 1000;
+async function gh(env, path, raw) {
+  const k = path + '|' + (raw ? 1 : 0), c = CACHE.get(k); if (c && Date.now() - c.t < TTL) return c.v;
+  const r = await fetch('https://api.github.com/repos/' + REPO + path, { headers: { authorization: 'Bearer ' + String(env.GITHUB_TOKEN || '').trim(), 'user-agent': 'ai-council', accept: raw ? 'application/vnd.github.raw' : 'application/vnd.github+json' } });
+  if (!r.ok) throw new Error('GitHub ' + r.status + (r.status === 401 || r.status === 404 ? ' — המפתח של GitHub חסר או בלי הרשאה לפרויקט' : ''));
+  const v = raw ? await r.text() : await r.json(); CACHE.set(k, { t: Date.now(), v }); return v;
+}
+async function codeSearch(env, b) {
+  if (!env.GITHUB_TOKEN) return { error: 'עוד לא חובר מפתח של GitHub — אי אפשר לקרוא את הקוד.' };
+  const q = String(b.q || '').trim().slice(0, 200); if (!q) return { error: 'מה לחפש בקוד?' };
+  let tree; try { tree = await gh(env, '/git/trees/main?recursive=1'); } catch (e) { return { error: String(e.message) }; }
+  const all = (tree.tree || []).filter(f => f.type === 'blob' && /\.(js|mjs|html|css|toml|sql|md|json)$/.test(f.path) && !/\.gen\.js$|^site\/vendor\/|package-lock|^CHANGES-/.test(f.path));
+  const words = q.split(/\s+/).filter(Boolean);
+  // a file name or path given → that file; else the main source files are searched for every word
+  const named = all.filter(f => words.some(w => f.path === w || f.path.endsWith('/' + w)));
+  const files = named.length ? named : all.filter(f => /^(site|src)\//.test(f.path) && f.size < 1200000);
+  const out = []; let size = 0, hits = 0;
+  for (const f of files.slice(0, 30)) {
+    let txt; try { txt = await gh(env, '/contents/' + encodeURI(f.path) + '?ref=main', true); } catch (e) { continue; }
+    const L = txt.split('\n');
+    if (named.length && txt.length <= 30000) { const piece = `### ${f.path} (כל הקובץ)\n` + txt; out.push(piece); size += piece.length; continue; }
+    const terms = named.length ? words.filter(w => !named.some(n => n.path.endsWith(w))) : words; if (!terms.length) { out.push(`### ${f.path}: הקובץ גדול מדי לצרף כולו (${Math.round(txt.length / 1000)}KB) — כתבו גם מילה לחפש בו`); continue; }
+    const lc = terms.map(w => w.toLowerCase()), marks = [];
+    L.forEach((l, i) => { const x = l.toLowerCase(); if (lc.every(w => x.includes(w)) || (lc.length > 1 && lc.filter(w => x.includes(w)).length >= 2)) marks.push(i); });
+    if (!marks.length) continue; hits += marks.length;
+    const R = []; for (const i of marks.slice(0, 12)) { const a = Math.max(0, i - 10), z = Math.min(L.length - 1, i + 14); if (R.length && a <= R[R.length - 1][1] + 1) R[R.length - 1][1] = z; else R.push([a, z]); }
+    for (const [a, z] of R) { const piece = `### ${f.path} שורות ${a + 1}–${z + 1}\n` + L.slice(a, z + 1).map(l => l.length > 400 ? l.slice(0, 400) + ' …' : l).join('\n'); if (size + piece.length > MAX_CODE) break; out.push(piece); size += piece.length; }
+    if (size > MAX_CODE) break;
+  }
+  return { files: files.length, hits, text: out.join('\n\n') || '', note: out.length ? '' : 'לא נמצא בקוד' };
+}
