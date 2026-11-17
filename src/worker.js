@@ -82,7 +82,8 @@ async function call1(env, m, prompt, modelOverride) {
 export default {
   async fetch(req, env) {
     const u = new URL(req.url);
-    if (!u.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
+    if (!u.pathname.startsWith('/api/')) { const r = await env.ASSETS.fetch(req); if (!/html/.test(r.headers.get('content-type') || '')) return r;
+      const h = new Headers(r.headers); h.set('cache-control', 'no-store'); return new Response(r.body, { status: r.status, headers: h }); } // the page itself is never kept stale on a phone
     if (req.method !== 'POST') return json({ error: 'POST בלבד' }, 405);
     if (tooMany(req.headers.get('cf-connecting-ip') || '?')) return json({ error: 'יותר מדי בקשות — נסו שוב בעוד דקה' }, 429);
     if (!(await okPassword(req, env))) return json({ error: env.COUNCIL_PASSWORD ? 'סיסמה שגויה' : 'עוד לא הוגדרה סיסמה למערכת' }, 401);

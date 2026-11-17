@@ -86,6 +86,7 @@
     <button class="ghost" id="copy">📋 העתק את כל הדיון</button>
   </section>
 </main>
+<button id="fab" class="hide" style="position:fixed;bottom:16px;left:16px;width:auto;border-radius:30px;padding:12px 18px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:9">💬 להגיב לדיון</button>
 <script>
 const $ = id => document.getElementById(id);
 const NAMES = { openai:'ChatGPT', claude:'Claude', gemini:'Gemini' };
@@ -118,6 +119,7 @@ function updateCost() {
   $('cost').textContent = n ? `הדיון ישלח ${n * r + s} בקשות למודלים (כל בקשה עולה כמה סנטים לכל היותר, לפי החשבון שלך אצל כל חברה).` : 'אף מודל עוד לא מחובר — חסרים מפתחות API.';
 }
 $('readOv').onclick = async e => { e.preventDefault(); try { const r = await api('/api/overview'); const d = document.createElement('div'); d.className = 'card'; d.innerHTML = '<b>📘 סקירת האפליקציה</b> <a href="#" style="float:left">סגור</a><div class="txt" style="white-space:pre-wrap;margin-top:8px"></div>'; d.querySelector('.txt').textContent = r.text; d.querySelector('a').onclick = ev => { ev.preventDefault(); d.remove(); }; $('out').prepend(d); d.scrollIntoView(); } catch (x) { alert(x.message); } };
+$('fab').onclick = () => { $('reply').scrollIntoView({ behavior:'smooth', block:'center' }); setTimeout(() => $('reply').focus(), 400); };
 $('logout').onclick = () => { try { localStorage.removeItem('council_pw'); } catch (e) {} PW = ''; location.reload(); };
 $('rounds').onchange = updateCost; $('sum').onchange = updateCost;
 
@@ -162,7 +164,7 @@ $('go').onclick = async () => {
       let res; try { res = await api('/api/ask', { model:by, task, summary:1, history:LOG, ...CTX }); } catch (e) { res = { status:'error', text:e.message }; }
       fill(d, res); if (res.status === 'ok') LOG.push({ model:by, round:'סיכום', text:res.text });
     }
-  } finally { $('go').disabled = false; $('again').classList.remove('hide'); }
+  } finally { $('go').disabled = false; $('again').classList.remove('hide'); $('fab').classList.remove('hide'); }
 };
 
 $('send').onclick = async () => {
