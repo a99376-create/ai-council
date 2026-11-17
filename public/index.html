@@ -65,6 +65,7 @@
         <select id="sum"><option value="claude">Claude מסכם</option><option value="openai">ChatGPT מסכם</option><option value="gemini">Gemini מסכם</option><option value="">בלי סיכום</option></select></div>
     </div>
     <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="checkbox" id="withApp" checked style="width:auto"> 📘 לצרף את סקירת האפליקציה (חבורת מזכי הרבים) <a href="#" id="readOv" style="margin-inline-start:auto;font-size:14px">לקרוא</a></label>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="checkbox" id="withIndex" checked style="width:auto"> 🗂️ לצרף את אינדקס הקוד (כל הקבצים והפונקציות — המודלים יבקשו לבד מה שחסר להם)</label>
     <label for="codeQ">🔎 קוד מהאפליקציה לצרף לדיון (לא חובה)</label>
     <textarea id="codeQ" style="min-height:70px;direction:ltr;text-align:left" placeholder="כל שורה = בקשה. שם פונקציה מביא את כולה. למשל:&#10;wPlan&#10;harvest&#10;site/walk.js"></textarea>
     <div class="row"><div><label for="branch" style="font-weight:400">מאיזה ענף לקרוא</label><select id="branch"><option value="main">main — מה שבאוויר</option><option value="v221-alleys">v221-alleys — הניסוי של הסמטאות</option></select></div></div>
@@ -145,8 +146,8 @@ function fill(d, res) {
 
 async function addCode(q, out) {
   const c = document.createElement('div'); c.className = 'card'; c.innerHTML = '<b>📎 עוד קוד</b> <span class="wait">מחפש</span>'; out.appendChild(c);
-  try { const r = await api('/api/code', { q, branch: $('branch').value }); if (r.error) { c.querySelector('span').textContent = '— ' + r.error; c.querySelector('span').className = 'err'; return; }
-    CTX.code = ((CTX.code || '') + '\n\n' + (r.text || '')).slice(-70000); c.innerHTML = `<details><summary><b>📎 עוד קוד שצורף</b> (ענף ${r.branch}) — ${r.text ? Math.round(r.text.length / 1000) + 'KB' : (r.note || 'לא נמצא')} (לחצו לראות)</summary><pre style="white-space:pre-wrap;direction:ltr;text-align:left;font-size:12px;max-height:50vh;overflow:auto"></pre></details>`; c.querySelector('pre').textContent = r.text || ''; }
+  try { const r = await api('/api/code', { q, branch: $('branch').value, ref: CTX.ref }); if (r.error) { c.querySelector('span').textContent = '— ' + r.error; c.querySelector('span').className = 'err'; return; }
+    CTX.code = ((CTX.code || '') + '\n\n' + (r.text || '')).slice(-100000); c.innerHTML = `<details><summary><b>📎 עוד קוד שצורף</b> (ענף ${r.branch}) — ${r.text ? Math.round(r.text.length / 1000) + 'KB' : (r.note || 'לא נמצא')} (לחצו לראות)</summary><pre style="white-space:pre-wrap;direction:ltr;text-align:left;font-size:12px;max-height:50vh;overflow:auto"></pre></details>`; c.querySelector('pre').textContent = r.text || ''; }
   catch (e) { c.querySelector('span').textContent = '— ' + e.message; } }
 function userCard(text, note) { const u = document.createElement('div'); u.className = 'card'; u.style.background = '#fffbea'; u.innerHTML = '<b>אתה:</b> <small class="note"></small><div class="txt" style="white-space:pre-wrap"></div>'; u.querySelector('small').textContent = note || ''; u.querySelector('.txt').textContent = text; $('out').appendChild(u); return u; }
 // the models ask for code themselves: a line [[קוד: name]] in an answer → fetched and attached before the next round
@@ -160,10 +161,14 @@ $('go').onclick = async () => {
   if (!live.length) { alert('אף מודל עוד לא מחובר — חסרים מפתחות API.'); return; }
   $('go').disabled = true; $('out').innerHTML = ''; LOG = []; TASK = task; RUNNING = true; PENDING = []; ASKED = new Set();
   $('again').classList.remove('hide'); $('fab').classList.remove('hide'); $('replyNote').textContent = 'אפשר לכתוב כבר עכשיו — מה שתשלח ייכנס לדיון לפני הסבב הבא.';
-  CTX = { withApp: $('withApp').checked ? 1 : 0, code: '' };
+  CTX = { withApp: $('withApp').checked ? 1 : 0, code: '', index: '', ref: '' };
+  // the whole discussion reads ONE version of the code: the branch's commit right now
+  if ($('withIndex').checked || $('codeQ').value.trim()) { const c = document.createElement('div'); c.className = 'note'; c.textContent = '🗂️ טוען את אינדקס הקוד…'; $('out').appendChild(c);
+    try { const r = await api('/api/index', { branch: $('branch').value }); if (r.error) c.textContent = '🗂️ ' + r.error; else { CTX.ref = r.ref; if ($('withIndex').checked) CTX.index = r.text; c.textContent = `🗂️ גרסת הקוד בדיון: ענף ${r.branch}, commit ${r.ref.slice(0, 7)}` + ($('withIndex').checked ? ` · אינדקס ${Math.round(r.text.length / 1000)}KB צורף` : ''); } }
+    catch (e) { c.textContent = '🗂️ ' + e.message; } }
   const cq = $('codeQ').value.trim();
   if (cq) { const c = document.createElement('div'); c.className = 'card'; c.innerHTML = '<b>📎 קוד מהאפליקציה</b> <span class="wait">מחפש</span>'; $('out').appendChild(c);
-    try { const r = await api('/api/code', { q: cq, branch: $('branch').value }); if (r.error) { c.querySelector('span').textContent = '— ' + r.error; c.querySelector('span').className = 'err'; }
+    try { const r = await api('/api/code', { q: cq, branch: $('branch').value, ref: CTX.ref }); if (r.error) { c.querySelector('span').textContent = '— ' + r.error; c.querySelector('span').className = 'err'; }
       else { CTX.code = r.text || ''; c.innerHTML = `<details><summary><b>📎 קוד שצורף לדיון</b> (ענף ${r.branch}) — ${r.text ? Math.round(r.text.length / 1000) + 'KB' : (r.note || 'לא נמצא')} (לחצו לראות)</summary><pre style="white-space:pre-wrap;direction:ltr;text-align:left;font-size:12px;max-height:50vh;overflow:auto"></pre></details>`; c.querySelector('pre').textContent = r.text || ''; } }
     catch (e) { c.querySelector('span').textContent = '— ' + e.message; } }
   const q = document.createElement('div'); q.className = 'card'; q.innerHTML = '<b>השאלה:</b><div class="txt" style="white-space:pre-wrap"></div>'; q.querySelector('.txt').textContent = task; $('out').appendChild(q);

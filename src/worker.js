@@ -12,7 +12,7 @@ const SYSTEM = 'אתה חבר במועצת AI שדנה בגלוי בשאלה ש�
   'אל תעמיד פנים שביצעת פעולות שלא ביצעת, ואל תמציא עובדות; אם אינך בטוח — אמור זאת. ' +
   'יש לך גישת קריאה לקוד של האפליקציה: כשחסר לך קוד, כתוב בשורה נפרדת [[קוד: שם]] — שם פונקציה, משתנה, טבלה או קובץ (למשל [[קוד: wTakePiece]]), שורה לכל בקשה — והמערכת תשלוף אותו בעצמה ותצרף אותו לסבב הבא. אל תבקש מהמשתמש להדביק קוד.';
 const NAMES = { openai: 'ChatGPT', claude: 'Claude', gemini: 'Gemini' }, WHO = { ...NAMES, user: 'המשתמש' };
-const MAX_TOKENS = 1500, MAX_TASK = 12000, MAX_HIST_EACH = 4000, MAX_CODE = 70000;
+const MAX_TOKENS = 1500, MAX_TASK = 12000, MAX_HIST_EACH = 4000, MAX_CODE = 100000;
 
 const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
@@ -32,6 +32,7 @@ function modelOf(env, m) { return m === 'openai' ? (env.OPENAI_MODEL || 'gpt-5.6
 function keyOf(env, m) { const k = m === 'openai' ? env.OPENAI_API_KEY : m === 'claude' ? env.ANTHROPIC_API_KEY : env.GEMINI_API_KEY; return String(k || '').replace(/[\s"'`]+/g, ''); } // a pasted key may carry spaces, a line break or quotes
 
 function ctxOf(b) { let c = ''; if (b.withApp) c += 'רקע — סקירת האפליקציה שהמשתמש מפתח (חבורת מזכי הרבים):\n' + OVERVIEW + '\n\n';
+  if (b.index) c += 'אינדקס הקוד של האפליקציה (קובץ: פונקציה:שורה) — גרסה ' + String(b.ref || '').slice(0, 10) + ':\n' + String(b.index).slice(0, 40000) + '\n\n';
   if (b.code) c += 'קטעי קוד מהאפליקציה שצורפו לדיון (מקור: GitHub, ענף main):\n' + String(b.code).slice(0, MAX_CODE) + '\n\n'; return c; }
 function promptOf(b) { return ctxOf(b) + promptOf0(b); }
 function promptOf0(b) {
@@ -97,6 +98,7 @@ export default {
     }
     if (u.pathname === '/api/overview') return json({ text: OVERVIEW });
     if (u.pathname === '/api/code') return json(await codeSearch(env, b));
+    if (u.pathname === '/api/index') return json(await codeIndex(env, b));
     return json({ error: 'לא נמצא' }, 404);
   }
 };
@@ -118,10 +120,11 @@ async function codeSearch(env, b) {
     const m = l.match(/(^|\s)@([\w.\/-]+)/); if (m) { branch = m[2]; l = l.replace(m[0], ' ').trim(); } if (l) reqs.push(l.slice(0, 200)); }
   if (b.branch) branch = String(b.branch).replace(/[^\w.\/-]/g, '') || 'main';
   if (!reqs.length) return { error: 'מה לחפש בקוד?' };
-  let tree; try { tree = await gh(env, '/git/trees/' + encodeURIComponent(branch) + '?recursive=1'); } catch (e) { return { error: String(e.message) + ' (ענף ' + branch + ')' }; }
+  let ref; try { ref = b.ref && /^[0-9a-f]{40}$/.test(b.ref) ? b.ref : await shaOf(env, branch); } catch (e) { return { error: String(e.message) + ' (ענף ' + branch + ')' }; }
+  let tree; try { tree = await gh(env, '/git/trees/' + ref + '?recursive=1'); } catch (e) { return { error: String(e.message) + ' (ענף ' + branch + ')' }; }
   const all = (tree.tree || []).filter(f => f.type === 'blob' && /\.(js|mjs|html|css|toml|sql|md|json)$/.test(f.path) && !/\.gen\.js$|^site\/vendor\/|package-lock|^CHANGES-/.test(f.path));
-  const src = all.filter(f => /^(site|src|tools)\//.test(f.path) || /^(schema\.sql|wrangler\.toml)$/.test(f.path));
-  const read = async f => { try { return await gh(env, '/contents/' + encodeURI(f.path) + '?ref=' + encodeURIComponent(branch), true); } catch (e) { return null; } };
+  const src = all.filter(f => /^(site|src|tools|test|\.github)\//.test(f.path) || /^(schema\.sql|wrangler\.toml|package\.json)$/.test(f.path));
+  const read = async f => { try { return await gh(env, '/contents/' + encodeURI(f.path) + '?ref=' + ref, true); } catch (e) { return null; } };
   const out = [], seen = new Set(); let size = 0, hits = 0; const room = () => MAX_CODE - size;
   const push = (head, body) => { const k = head; if (seen.has(k)) return; seen.add(k); const piece = `### ${head}\n` + body; if (piece.length > room()) { out.push(`### ${head}: (דולג — נגמר המקום, ${Math.round(piece.length / 1000)}KB)`); return; } out.push(piece); size += piece.length; };
   const clip = l => l.length > 400 ? l.slice(0, 400) + ' …' : l;
@@ -149,5 +152,23 @@ async function codeSearch(env, b) {
       }
     }
   }
-  return { branch, files: src.length, hits, text: out.join('\n\n'), note: out.length ? '' : 'לא נמצא בקוד' };
+  return { branch, ref, files: src.length, hits, text: out.join('\n\n'), note: out.length ? '' : 'לא נמצא בקוד' };
+}
+
+async function shaOf(env, branch) { const c = await gh(env, '/commits/' + encodeURIComponent(branch)); return c.sha; }
+// 🗂️ the code's index: every file with its functions (name:line) — so a model knows what exists and asks for it by name
+async function codeIndex(env, b) {
+  if (!env.GITHUB_TOKEN) return { error: 'עוד לא חובר מפתח של GitHub' };
+  const branch = String(b.branch || 'main').replace(/[^\w.\/-]/g, '') || 'main';
+  let ref, tree; try { ref = await shaOf(env, branch); tree = await gh(env, '/git/trees/' + ref + '?recursive=1'); } catch (e) { return { error: String(e.message) }; }
+  const k = 'index|' + ref, c = CACHE.get(k); if (c) return c.v;
+  const files = (tree.tree || []).filter(f => f.type === 'blob' && /^(site|src|tools)\/[^/]+\.(m?js)$/.test(f.path) && !/\.gen\.js$|^site\/vendor\//.test(f.path));
+  const tests = (tree.tree || []).filter(f => f.type === 'blob' && /^test\//.test(f.path)).map(f => f.path.replace(/^test\//, ''));
+  const lines = [];
+  for (const f of files) { let txt; try { txt = await gh(env, '/contents/' + encodeURI(f.path) + '?ref=' + ref, true); } catch (e) { continue; }
+    const L = txt.split('\n'), names = [];
+    L.forEach((l, i) => { const m = l.match(/^\s{0,2}(?:export\s+)?(?:async\s+)?function\s+([\w$]+)\s*\(/) || l.match(/^(?:export\s+)?const\s+([\w$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*=>/); if (m) names.push(m[1] + ':' + (i + 1)); });
+    lines.push(`${f.path} (${L.length} שורות): ${names.join(' ')}`); }
+  lines.push(`test/ (${tests.length} קבצי בדיקה): ${tests.join(' ')}`);
+  const v = { branch, ref, text: lines.join('\n') }; CACHE.set(k, { t: Date.now(), v }); return v;
 }
