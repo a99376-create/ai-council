@@ -1,6 +1,6 @@
 name: Deploy the council
+# Cloudflare builds and deploys this Worker by itself (Workers Builds, connected to this repository) — this is only a manual fallback.
 on:
-  push: { branches: [main] }
   workflow_dispatch:
 permissions: { contents: read }
 jobs:

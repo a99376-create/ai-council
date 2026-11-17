@@ -9,7 +9,11 @@ ChatGPT, Claude ו-Gemini דנים בשאלה שלך בגלוי: בסבב הרא
 - מודל בלי מפתח פשוט לא משתתף.
 - שמות המודלים ב-`wrangler.toml` (`[vars]`) — אם חברה מוציאה מודל משימוש, מחליפים שם.
 
-## סודות (GitHub → Settings → Secrets and variables → Actions)
+## איך זה עולה
+Cloudflare מחובר לפרויקט הזה (Workers Builds): כל שינוי ב-main נבנה ומועלה אוטומטית.
+הסודות נשמרים ב-Cloudflare: Workers & Pages → ai-council → Settings → Variables and Secrets.
+
+## סודות (גיבוי: GitHub → Settings → Secrets and variables → Actions, ואז הרצה ידנית של הפעולה)
 | שם | מה |
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | טוקן של Cloudflare (תבנית "Edit Cloudflare Workers") |
