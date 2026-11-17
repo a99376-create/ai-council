@@ -40,8 +40,8 @@ function promptOf(b) {
 // a busy model (429/5xx) is asked again after a short wait; Gemini then falls back to a lighter model (GEMINI_FALLBACK)
 async function call(env, m, prompt) {
   let res; for (const wait of [0, 2500, 6000]) { if (wait) await new Promise(r => setTimeout(r, wait)); res = await call1(env, m, prompt, null); if (!res.busy) return res; }
-  if (m === 'gemini') { const fb = env.GEMINI_FALLBACK || 'gemini-3.5-flash'; if (fb !== modelOf(env, m)) { const r2 = await call1(env, m, prompt, fb); if (!r2.busy) return r2; } }
-  return { status: 'error', text: NAMES[m] + ' עמוס כרגע אצל החברה שלו (ניסיתי שוב כמה פעמים). אפשר לנסות שוב בעוד דקה.' };
+  if (m === 'gemini') { const fb = env.GEMINI_FALLBACK || 'gemini-3.5-flash'; if (fb !== modelOf(env, m)) { const r2 = await call1(env, m, prompt, fb); if (!r2.busy) return r2; res = r2; } }
+  return { status: 'error', text: NAMES[m] + ' לא ענה גם אחרי כמה ניסיונות. ההודעה האחרונה: ' + res.text };
 }
 async function call1(env, m, prompt, modelOverride) {
   const key = keyOf(env, m); if (!key) return { status: 'missing', text: 'אין מפתח API ל-' + NAMES[m] + ' — המודל הזה לא משתתף.' };
