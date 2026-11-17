@@ -26,7 +26,7 @@ function tooMany(ip) { const m = Math.floor(Date.now() / 60000), k = ip + '|' + 
   if (HITS.size > 5000) for (const key of HITS.keys()) if (!key.endsWith('|' + m)) HITS.delete(key); return n > 40; }
 
 function modelOf(env, m) { return m === 'openai' ? (env.OPENAI_MODEL || 'gpt-5.6-terra') : m === 'claude' ? (env.ANTHROPIC_MODEL || 'claude-sonnet-5-5') : (env.GEMINI_MODEL || 'gemini-3.8-flash'); }
-function keyOf(env, m) { return m === 'openai' ? env.OPENAI_API_KEY : m === 'claude' ? env.ANTHROPIC_API_KEY : env.GEMINI_API_KEY; }
+function keyOf(env, m) { const k = m === 'openai' ? env.OPENAI_API_KEY : m === 'claude' ? env.ANTHROPIC_API_KEY : env.GEMINI_API_KEY; return String(k || '').replace(/[\s"'`]+/g, ''); } // a pasted key may carry spaces, a line break or quotes
 
 function promptOf(b) {
   const task = String(b.task || '').slice(0, MAX_TASK), round = Math.max(1, Math.min(4, +b.round || 1)), rounds = Math.max(1, Math.min(4, +b.rounds || 3));
