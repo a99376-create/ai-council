@@ -57,7 +57,7 @@ async function call1(env, m, prompt, modelOverride) {
     }
     if (m === 'claude') {
       // the key goes as a bearer token (newer keys, sk-ant-usr…, expect it); the older x-api-key header is tried once if that is refused
-      const body = JSON.stringify({ model, max_tokens: MAX_TOKENS, system: SYSTEM, messages: [{ role: 'user', content: prompt }] }), base = { 'anthropic-version': '2023-06-01', 'content-type': 'application/json' };
+      const body = JSON.stringify({ model, max_tokens: MAX_TOKENS, system: SYSTEM, messages: [{ role: 'user', content: prompt }] }), base = { 'anthropic-version': env.ANTHROPIC_VERSION || '2026-10-21', 'content-type': 'application/json' }; /* the version in Anthropic's current docs — personal keys (sk-ant-usr…) are newer than 2023-06-01 */
       r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { ...base, authorization: 'Bearer ' + key }, body });
       if (r.status === 401) r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { ...base, 'x-api-key': key }, body });
       j = await r.json().catch(() => ({}));
