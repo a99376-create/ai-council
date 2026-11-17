@@ -37,15 +37,21 @@ function promptOf(b) {
   return `שאלת המשתמש:\n${task}\n\nזה סבב ${round} מתוך ${rounds}. אלה הדברים שנאמרו עד עכשיו:\n\n${hist}\n\nהתייחס לדברי האחרים: במה אתה מסכים, במה לא ולמה. אחר כך כתוב את הגרסה המשופרת שלך.${round === rounds ? ' זה הסבב האחרון — סיים בהמלצה ברורה.' : ''}`;
 }
 
+// a busy model (429/5xx) is asked again after a short wait; Gemini then falls back to a lighter model (GEMINI_FALLBACK)
 async function call(env, m, prompt) {
+  let res; for (const wait of [0, 2500, 6000]) { if (wait) await new Promise(r => setTimeout(r, wait)); res = await call1(env, m, prompt, null); if (!res.busy) return res; }
+  if (m === 'gemini') { const fb = env.GEMINI_FALLBACK || 'gemini-3.5-flash'; if (fb !== modelOf(env, m)) { const r2 = await call1(env, m, prompt, fb); if (!r2.busy) return r2; } }
+  return { status: 'error', text: NAMES[m] + ' עמוס כרגע אצל החברה שלו (ניסיתי שוב כמה פעמים). אפשר לנסות שוב בעוד דקה.' };
+}
+async function call1(env, m, prompt, modelOverride) {
   const key = keyOf(env, m); if (!key) return { status: 'missing', text: 'אין מפתח API ל-' + NAMES[m] + ' — המודל הזה לא משתתף.' };
-  const model = modelOf(env, m); let r, j;
+  const model = modelOverride || modelOf(env, m); let r, j; const busy = st => st === 429 || st >= 500;
   try {
     if (m === 'openai') {
       r = await fetch('https://api.openai.com/v1/responses', { method: 'POST', headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
         body: JSON.stringify({ model, instructions: SYSTEM, input: prompt, max_output_tokens: MAX_TOKENS * 3 }) });
       j = await r.json().catch(() => ({}));
-      if (!r.ok) return { status: 'error', text: 'שגיאה מ-OpenAI (' + r.status + '): ' + String(j.error && j.error.message || '').slice(0, 300) };
+      if (!r.ok) return { status: 'error', busy: busy(r.status), text: 'שגיאה מ-OpenAI (' + r.status + '): ' + String(j.error && j.error.message || '').slice(0, 300) };
       const t = (j.output || []).flatMap(o => o.content || []).filter(c => c.type === 'output_text').map(c => c.text).join('\n');
       return { status: 'ok', text: t || '(לא התקבל טקסט)', model };
     }
@@ -53,13 +59,13 @@ async function call(env, m, prompt) {
       r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
         body: JSON.stringify({ model, max_tokens: MAX_TOKENS, system: SYSTEM, messages: [{ role: 'user', content: prompt }] }) });
       j = await r.json().catch(() => ({}));
-      if (!r.ok) return { status: 'error', text: 'שגיאה מ-Anthropic (' + r.status + '): ' + String(j.error && j.error.message || '').slice(0, 300) };
+      if (!r.ok) return { status: 'error', busy: busy(r.status), text: 'שגיאה מ-Anthropic (' + r.status + '): ' + String(j.error && j.error.message || '').slice(0, 300) };
       return { status: 'ok', text: (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n') || '(לא התקבל טקסט)', model };
     }
     r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', { method: 'POST', headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
       body: JSON.stringify({ systemInstruction: { parts: [{ text: SYSTEM }] }, contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: MAX_TOKENS * 3 } }) });
     j = await r.json().catch(() => ({}));
-    if (!r.ok) return { status: 'error', text: 'שגיאה מ-Gemini (' + r.status + '): ' + String(j.error && j.error.message || '').slice(0, 300) };
+    if (!r.ok) return { status: 'error', busy: busy(r.status), text: 'שגיאה מ-Gemini (' + r.status + '): ' + String(j.error && j.error.message || '').slice(0, 300) };
     const t = (j.candidates || []).flatMap(c => (c.content && c.content.parts) || []).map(p => p.text || '').join('\n');
     return { status: 'ok', text: t || '(לא התקבל טקסט)', model };
   } catch (e) { return { status: 'error', text: 'לא הצלחתי להגיע ל-' + NAMES[m] + ': ' + String(e && e.message || e).slice(0, 200) }; }
