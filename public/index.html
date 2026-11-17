@@ -67,6 +67,8 @@
     <div class="chips" id="chips"></div>
     <div style="height:10px"></div>
     <button id="go">התחל דיון</button>
+    <div style="height:8px"></div>
+    <button class="ghost" id="logout">יציאה (לשכוח את הסיסמה במכשיר הזה)</button>
     <div class="note" id="cost" style="margin-top:8px"></div>
   </section>
 
@@ -77,7 +79,7 @@
 const $ = id => document.getElementById(id);
 const NAMES = { openai:'ChatGPT', claude:'Claude', gemini:'Gemini' };
 let PW = '', MODELS = [], LOG = [];
-try { PW = sessionStorage.getItem('council_pw') || ''; } catch (e) {}
+try { PW = localStorage.getItem('council_pw') || ''; } catch (e) {}
 
 async function api(path, body) {
   const r = await fetch(path, { method:'POST', headers:{ 'content-type':'application/json', 'x-council-password':PW }, body:JSON.stringify(body || {}) });
@@ -90,11 +92,11 @@ async function enter() {
   $('loginErr').textContent = '';
   try {
     const s = await api('/api/status'); MODELS = s.models;
-    try { sessionStorage.setItem('council_pw', PW); } catch (e) {}
+    try { localStorage.setItem('council_pw', PW); } catch (e) {}
     $('login').classList.add('hide'); $('ask').classList.remove('hide');
     $('chips').innerHTML = MODELS.map(m => `<span class="chip ${m.ready ? 'on' : 'off'}" title="${m.model}">${m.name}${m.ready ? '' : ' — אין מפתח'}</span>`).join('');
     updateCost();
-  } catch (e) { $('loginErr').textContent = e.message; try { sessionStorage.removeItem('council_pw'); } catch (x) {} }
+  } catch (e) { $('loginErr').textContent = e.message; try { localStorage.removeItem('council_pw'); } catch (x) {} }
 }
 $('enter').onclick = () => { PW = $('pw').value; enter(); };
 $('pw').addEventListener('keydown', e => { if (e.key === 'Enter') { PW = $('pw').value; enter(); } });
@@ -104,6 +106,7 @@ function updateCost() {
   const n = MODELS.filter(m => m.ready).length, r = +$('rounds').value, s = $('sum').value ? 1 : 0;
   $('cost').textContent = n ? `הדיון ישלח ${n * r + s} בקשות למודלים (כל בקשה עולה כמה סנטים לכל היותר, לפי החשבון שלך אצל כל חברה).` : 'אף מודל עוד לא מחובר — חסרים מפתחות API.';
 }
+$('logout').onclick = () => { try { localStorage.removeItem('council_pw'); } catch (e) {} PW = ''; location.reload(); };
 $('rounds').onchange = updateCost; $('sum').onchange = updateCost;
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
