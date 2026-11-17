@@ -81,6 +81,8 @@
     <div class="card">
       <label for="reply">💬 התגובה שלך למועצה</label>
       <textarea id="reply" placeholder="מה דעתך על מה שנאמר? שאלה נוספת, תיקון, משהו שלא הסכמת איתו…" style="min-height:90px"></textarea>
+      <label for="moreCode" style="font-weight:400;margin-top:8px">🔎 לצרף עוד קוד לתגובה (לא חובה — שורה לכל שם, מאותו ענף)</label>
+      <textarea id="moreCode" style="min-height:60px;direction:ltr;text-align:left" placeholder="harvest&#10;wTakePiece&#10;alley"></textarea>
       <div style="height:8px"></div>
       <button id="send">שלח למועצה</button>
     </div>
@@ -173,6 +175,11 @@ $('send').onclick = async () => {
   const live = MODELS.filter(m => m.ready).map(m => m.id); $('send').disabled = true; $('go').disabled = true;
   const out = $('out'), h = document.createElement('div'); h.className = 'round'; h.textContent = 'התגובה שלך'; out.appendChild(h);
   const u = document.createElement('div'); u.className = 'card'; u.style.background = '#fffbea'; u.innerHTML = '<b>אתה:</b><div class="txt" style="white-space:pre-wrap"></div>'; u.querySelector('.txt').textContent = text; out.appendChild(u);
+  const mc = $('moreCode').value.trim();
+  if (mc) { const c = document.createElement('div'); c.className = 'card'; c.innerHTML = '<b>📎 עוד קוד</b> <span class="wait">מחפש</span>'; out.appendChild(c);
+    try { const r = await api('/api/code', { q: mc, branch: $('branch').value }); if (r.error) { c.querySelector('span').textContent = '— ' + r.error; c.querySelector('span').className = 'err'; }
+      else { CTX.code = ((CTX.code || '') + '\n\n' + (r.text || '')).slice(-70000); c.innerHTML = `<details><summary><b>📎 עוד קוד שצורף</b> (ענף ${r.branch}) — ${r.text ? Math.round(r.text.length / 1000) + 'KB' : (r.note || 'לא נמצא')} (לחצו לראות)</summary><pre style="white-space:pre-wrap;direction:ltr;text-align:left;font-size:12px;max-height:50vh;overflow:auto"></pre></details>`; c.querySelector('pre').textContent = r.text || ''; } }
+    catch (e) { c.querySelector('span').textContent = '— ' + e.message; } }
   const history = LOG.slice(); LOG.push({ model:'user', round:'תגובה', text }); ROUND++;
   const h2 = document.createElement('div'); h2.className = 'round'; h2.textContent = 'המועצה עונה לך'; out.appendChild(h2);
   // the answers go above the reply box, so the box stays at the bottom
@@ -182,7 +189,7 @@ $('send').onclick = async () => {
       let res; try { res = await api('/api/ask', { model:m, task:TASK, reply:text, history, ...CTX }); } catch (e) { res = { status:'error', text:e.message }; }
       fill(d, res); if (res.status === 'ok') LOG.push({ model:m, round:ROUND, text:res.text });
     }));
-  } finally { $('send').disabled = false; $('go').disabled = false; $('reply').value = ''; }
+  } finally { $('send').disabled = false; $('go').disabled = false; $('reply').value = ''; $('moreCode').value = ''; }
 };
 $('copy').onclick = async () => {
   const txt = 'השאלה:\n' + $('task').value.trim() + '\n\n' + LOG.map(x => `— ${x.model === 'user' ? 'אני' : NAMES[x.model]} (${typeof x.round === 'number' ? 'סבב ' + x.round : x.round}):\n${x.text}`).join('\n\n');
