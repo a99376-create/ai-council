@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>מועצת ה-AI</title>
+<style>
+  :root { --bg:#f5f3ee; --card:#fff; --ink:#1d2330; --mute:#6b7280; --line:#e5e1d8; --navy:#1f3354;
+    --openai:#10a37f; --claude:#c96442; --gemini:#3b6fd8; --sum:#7a5bb5; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.6 system-ui,-apple-system,"Segoe UI",Arial,sans-serif; }
+  header { background:var(--navy); color:#fff; padding:14px 16px; position:sticky; top:0; z-index:5; }
+  header h1 { margin:0; font-size:20px; }
+  header .sub { font-size:13px; opacity:.8; }
+  main { max-width:760px; margin:0 auto; padding:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:12px; }
+  label { display:block; font-weight:600; margin:6px 0 4px; }
+  textarea, input, select { width:100%; font:inherit; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+  textarea { min-height:120px; resize:vertical; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .row > * { flex:1; min-width:140px; }
+  button { font:inherit; font-weight:700; border:0; border-radius:12px; padding:12px 16px; background:var(--navy); color:#fff; width:100%; cursor:pointer; }
+  button:disabled { opacity:.5; }
+  button.ghost { background:#fff; color:var(--navy); border:1px solid var(--line); }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .chip { font-size:13px; padding:3px 10px; border-radius:20px; border:1px solid var(--line); background:#fff; }
+  .chip.on::before { content:"● "; } .chip.off { opacity:.55; } .chip.off::before { content:"○ "; }
+  .round { font-weight:800; color:var(--navy); margin:18px 2px 8px; }
+  .msg { border-inline-start:5px solid var(--line); }
+  .msg .who { font-weight:800; display:flex; justify-content:space-between; gap:8px; }
+  .msg .who small { font-weight:400; color:var(--mute); }
+  .msg .txt { white-space:pre-wrap; word-wrap:break-word; margin-top:6px; }
+  .msg.openai { border-inline-start-color:var(--openai); } .msg.openai .who { color:var(--openai); }
+  .msg.claude { border-inline-start-color:var(--claude); } .msg.claude .who { color:var(--claude); }
+  .msg.gemini { border-inline-start-color:var(--gemini); } .msg.gemini .who { color:var(--gemini); }
+  .msg.sum { border-inline-start-color:var(--sum); background:#faf7ff; } .msg.sum .who { color:var(--sum); }
+  .msg.err .txt { color:#a33; }
+  .wait { color:var(--mute); }
+  .wait::after { content:"…"; animation:dots 1.2s steps(3) infinite; }
+  @keyframes dots { 0%{content:"."} 33%{content:".."} 66%{content:"..."} }
+  .note { font-size:13px; color:var(--mute); }
+  .hide { display:none; }
+  .err { color:#a33; font-weight:600; }
+</style>
+</head>
+<body>
+<header><h1>🏛️ מועצת ה-AI</h1><div class="sub">ChatGPT · Claude · Gemini דנים בשאלה שלך — ואתה רואה את כל הדיון</div></header>
+<main>
+  <section id="login" class="card">
+    <label for="pw">סיסמה</label>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="הסיסמה של המועצה">
+    <div style="height:10px"></div>
+    <button id="enter">כניסה</button>
+    <div id="loginErr" class="err"></div>
+  </section>
+
+  <section id="ask" class="card hide">
+    <label for="task">על מה המועצה תדון?</label>
+    <textarea id="task" placeholder="כתוב כאן את השאלה או המשימה, כמה שיותר מפורט"></textarea>
+    <div class="row">
+      <div><label for="rounds">מספר סבבים</label>
+        <select id="rounds"><option value="1">1 — כל אחד עונה לבד</option><option value="2" selected>2 — עונים ומגיבים זה לזה</option><option value="3">3 — דיון מלא</option></select></div>
+      <div><label for="sum">סיכום בסוף</label>
+        <select id="sum"><option value="claude">Claude מסכם</option><option value="openai">ChatGPT מסכם</option><option value="gemini">Gemini מסכם</option><option value="">בלי סיכום</option></select></div>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div style="height:10px"></div>
+    <button id="go">התחל דיון</button>
+    <div class="note" id="cost" style="margin-top:8px"></div>
+  </section>
+
+  <section id="out"></section>
+  <section id="again" class="hide"><button class="ghost" id="copy">📋 העתק את כל הדיון</button></section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const NAMES = { openai:'ChatGPT', claude:'Claude', gemini:'Gemini' };
+let PW = '', MODELS = [], LOG = [];
+try { PW = sessionStorage.getItem('council_pw') || ''; } catch (e) {}
+
+async function api(path, body) {
+  const r = await fetch(path, { method:'POST', headers:{ 'content-type':'application/json', 'x-council-password':PW }, body:JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({ error:'תשובה לא תקינה מהשרת' }));
+  if (!r.ok) throw Object.assign(new Error(j.error || ('שגיאה ' + r.status)), { status:r.status });
+  return j;
+}
+
+async function enter() {
+  $('loginErr').textContent = '';
+  try {
+    const s = await api('/api/status'); MODELS = s.models;
+    try { sessionStorage.setItem('council_pw', PW); } catch (e) {}
+    $('login').classList.add('hide'); $('ask').classList.remove('hide');
+    $('chips').innerHTML = MODELS.map(m => `<span class="chip ${m.ready ? 'on' : 'off'}" title="${m.model}">${m.name}${m.ready ? '' : ' — אין מפתח'}</span>`).join('');
+    updateCost();
+  } catch (e) { $('loginErr').textContent = e.message; try { sessionStorage.removeItem('council_pw'); } catch (x) {} }
+}
+$('enter').onclick = () => { PW = $('pw').value; enter(); };
+$('pw').addEventListener('keydown', e => { if (e.key === 'Enter') { PW = $('pw').value; enter(); } });
+if (PW) enter();
+
+function updateCost() {
+  const n = MODELS.filter(m => m.ready).length, r = +$('rounds').value, s = $('sum').value ? 1 : 0;
+  $('cost').textContent = n ? `הדיון ישלח ${n * r + s} בקשות למודלים (כל בקשה עולה כמה סנטים לכל היותר, לפי החשבון שלך אצל כל חברה).` : 'אף מודל עוד לא מחובר — חסרים מפתחות API.';
+}
+$('rounds').onchange = updateCost; $('sum').onchange = updateCost;
+
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+function card(cls, who, sub) {
+  const d = document.createElement('div'); d.className = 'card msg ' + cls;
+  d.innerHTML = `<div class="who"><span>${esc(who)}</span><small>${esc(sub || '')}</small></div><div class="txt wait">חושב</div>`;
+  $('out').appendChild(d); return d;
+}
+function fill(d, res) {
+  const t = d.querySelector('.txt'); t.classList.remove('wait'); t.textContent = res.text || '';
+  if (res.status !== 'ok') d.classList.add('err');
+  if (res.model) d.querySelector('small').textContent += ' · ' + res.model;
+}
+
+$('go').onclick = async () => {
+  const task = $('task').value.trim(); if (task.length < 3) { $('task').focus(); return; }
+  const rounds = +$('rounds').value, sumBy = $('sum').value, live = MODELS.filter(m => m.ready).map(m => m.id);
+  if (!live.length) { alert('אף מודל עוד לא מחובר — חסרים מפתחות API.'); return; }
+  $('go').disabled = true; $('out').innerHTML = ''; $('again').classList.add('hide'); LOG = [];
+  const q = document.createElement('div'); q.className = 'card'; q.innerHTML = '<b>השאלה:</b><div class="txt" style="white-space:pre-wrap"></div>'; q.querySelector('.txt').textContent = task; $('out').appendChild(q);
+  try {
+    for (let r = 1; r <= rounds; r++) {
+      const h = document.createElement('div'); h.className = 'round'; h.textContent = r === 1 ? 'סבב 1 — כל אחד מציע' : `סבב ${r} — מגיבים זה לזה`; $('out').appendChild(h);
+      const history = LOG.slice();
+      await Promise.all(live.map(async m => {
+        const d = card(m, NAMES[m], 'סבב ' + r);
+        let res; try { res = await api('/api/ask', { model:m, task, round:r, rounds, history }); } catch (e) { res = { status:'error', text:e.message }; }
+        fill(d, res); if (res.status === 'ok') LOG.push({ model:m, round:r, text:res.text });
+      }));
+    }
+    if (sumBy && LOG.length) {
+      const h = document.createElement('div'); h.className = 'round'; h.textContent = 'סיכום'; $('out').appendChild(h);
+      const by = live.includes(sumBy) ? sumBy : live[0], d = card('sum', 'סיכום — ' + NAMES[by], '');
+      let res; try { res = await api('/api/ask', { model:by, task, summary:1, history:LOG }); } catch (e) { res = { status:'error', text:e.message }; }
+      fill(d, res); if (res.status === 'ok') LOG.push({ model:by, round:'סיכום', text:res.text });
+    }
+  } finally { $('go').disabled = false; $('again').classList.remove('hide'); }
+};
+
+$('copy').onclick = async () => {
+  const txt = 'השאלה:\n' + $('task').value.trim() + '\n\n' + LOG.map(x => `— ${NAMES[x.model]} (${typeof x.round === 'number' ? 'סבב ' + x.round : x.round}):\n${x.text}`).join('\n\n');
+  try { await navigator.clipboard.writeText(txt); $('copy').textContent = '✅ הועתק'; } catch (e) { $('copy').textContent = 'לא הצלחתי להעתיק'; }
+  setTimeout(() => { $('copy').textContent = '📋 העתק את כל הדיון'; }, 2000);
+};
+</script>
+</body>
+</html>

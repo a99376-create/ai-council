@@ -1,0 +1,33 @@
+name: Deploy the council
+on:
+  push: { branches: [main] }
+  workflow_dispatch:
+permissions: { contents: read }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Check the Cloudflare token
+        env: { CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}" }
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then echo "::error::Missing secret CLOUDFLARE_API_TOKEN (Settings → Secrets and variables → Actions)"; exit 1; fi
+      - name: Deploy
+        env: { CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}" }
+        run: npx -y wrangler@4 deploy 2>&1 | tee deploy.log
+      - name: Put the keys into the Worker (only those that exist; never printed)
+        env:
+          CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          COUNCIL_PASSWORD: "${{ secrets.COUNCIL_PASSWORD }}"
+          OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}"
+          ANTHROPIC_API_KEY: "${{ secrets.ANTHROPIC_API_KEY }}"
+          GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
+        run: |
+          for k in COUNCIL_PASSWORD OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY; do
+            v="${!k}"; if [ -n "$v" ]; then printf '%s' "$v" | npx -y wrangler@4 secret put "$k" >/dev/null && echo "✓ $k"; else echo "– $k: not set in GitHub secrets"; fi
+          done
+      - name: The address
+        run: |
+          u=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' deploy.log | head -1); echo "## 🏛️ $u" >> "$GITHUB_STEP_SUMMARY"; echo "$u"
