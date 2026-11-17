@@ -97,7 +97,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const NAMES = { openai:'ChatGPT', claude:'Claude', gemini:'Gemini' };
-let PW = '', MODELS = [], LOG = [], ROUND = 0, TASK = '', CTX = {}, RUNNING = false, PENDING = [], WAKE = null;
+let PW = '', MODELS = [], LOG = [], ROUND = 0, TASK = '', CTX = {}, RUNNING = false, PENDING = [], WAKE = null, ASKED = new Set();
 try { PW = localStorage.getItem('council_pw') || ''; } catch (e) {}
 
 async function api(path, body) {
@@ -149,13 +149,16 @@ async function addCode(q, out) {
     CTX.code = ((CTX.code || '') + '\n\n' + (r.text || '')).slice(-70000); c.innerHTML = `<details><summary><b>📎 עוד קוד שצורף</b> (ענף ${r.branch}) — ${r.text ? Math.round(r.text.length / 1000) + 'KB' : (r.note || 'לא נמצא')} (לחצו לראות)</summary><pre style="white-space:pre-wrap;direction:ltr;text-align:left;font-size:12px;max-height:50vh;overflow:auto"></pre></details>`; c.querySelector('pre').textContent = r.text || ''; }
   catch (e) { c.querySelector('span').textContent = '— ' + e.message; } }
 function userCard(text, note) { const u = document.createElement('div'); u.className = 'card'; u.style.background = '#fffbea'; u.innerHTML = '<b>אתה:</b> <small class="note"></small><div class="txt" style="white-space:pre-wrap"></div>'; u.querySelector('small').textContent = note || ''; u.querySelector('.txt').textContent = text; $('out').appendChild(u); return u; }
+// the models ask for code themselves: a line [[קוד: name]] in an answer → fetched and attached before the next round
+async function fetchAsked(from) { const want = []; for (const x of LOG.slice(from)) { if (x.model === 'user') continue; for (const m of String(x.text).matchAll(/\[\[\s*(?:קוד|code)\s*:\s*([^\]\n]+)\]\]/gi)) for (const n of m[1].split(/[,،]/)) { const k = n.trim(); if (k && !ASKED.has(k)) { ASKED.add(k); want.push(k); } } }
+  if (want.length) { const h = document.createElement('div'); h.className = 'note'; h.textContent = '🔎 המודלים ביקשו קוד: ' + want.join(', '); $('out').appendChild(h); await addCode(want.join('\n'), $('out')); } }
 // what he wrote while a round was running goes into the discussion before the next round
 async function flushPending() { while (PENDING.length) { const p = PENDING.shift(); if (p.card) p.card.querySelector('small').textContent = '— נכנס לדיון'; else userCard(p.text, ''); if (p.code) await addCode(p.code, $('out')); LOG.push({ model:'user', round:'הערה', text:p.text }); } }
 $('go').onclick = async () => {
   const task = $('task').value.trim(); if (task.length < 3) { $('task').focus(); return; }
   const rounds = +$('rounds').value, sumBy = $('sum').value, live = MODELS.filter(m => m.ready).map(m => m.id);
   if (!live.length) { alert('אף מודל עוד לא מחובר — חסרים מפתחות API.'); return; }
-  $('go').disabled = true; $('out').innerHTML = ''; LOG = []; TASK = task; RUNNING = true; PENDING = [];
+  $('go').disabled = true; $('out').innerHTML = ''; LOG = []; TASK = task; RUNNING = true; PENDING = []; ASKED = new Set();
   $('again').classList.remove('hide'); $('fab').classList.remove('hide'); $('replyNote').textContent = 'אפשר לכתוב כבר עכשיו — מה שתשלח ייכנס לדיון לפני הסבב הבא.';
   CTX = { withApp: $('withApp').checked ? 1 : 0, code: '' };
   const cq = $('codeQ').value.trim();
@@ -170,13 +173,13 @@ $('go').onclick = async () => {
         await new Promise(res => { WAKE = res; }); WAKE = null; $('cont').classList.add('hide'); $('replyNote').textContent = 'אפשר לכתוב כבר עכשיו — מה שתשלח ייכנס לדיון לפני הסבב הבא.'; }
       await flushPending();
       const h = document.createElement('div'); h.className = 'round'; h.textContent = r === 1 ? 'סבב 1 — כל אחד מציע' : `סבב ${r} — מגיבים זה לזה`; $('out').appendChild(h);
-      const history = LOG.slice();
+      const history = LOG.slice(), from = LOG.length;
       await Promise.all(live.map(async m => {
         const d = card(m, NAMES[m], 'סבב ' + r);
         let res; try { res = await api('/api/ask', { model:m, task, round:r, rounds, history, ...CTX }); } catch (e) { res = { status:'error', text:e.message }; }
         fill(d, res); if (res.status === 'ok') LOG.push({ model:m, round:r, text:res.text });
       }));
-      ROUND = r;
+      ROUND = r; await fetchAsked(from);
     }
     await flushPending();
     if (sumBy && LOG.length) {
@@ -196,7 +199,7 @@ $('send').onclick = async () => {
   const out = $('out'), h = document.createElement('div'); h.className = 'round'; h.textContent = 'התגובה שלך'; out.appendChild(h);
   userCard(text, '');
   const mc = $('moreCode').value.trim(); if (mc) await addCode(mc, out);
-  const history = LOG.slice(); LOG.push({ model:'user', round:'תגובה', text }); ROUND++;
+  const history = LOG.slice(); LOG.push({ model:'user', round:'תגובה', text }); ROUND++; const from = LOG.length;
   const h2 = document.createElement('div'); h2.className = 'round'; h2.textContent = 'המועצה עונה לך'; out.appendChild(h2);
   // the answers go above the reply box, so the box stays at the bottom
   try {
@@ -205,6 +208,7 @@ $('send').onclick = async () => {
       let res; try { res = await api('/api/ask', { model:m, task:TASK, reply:text, history, ...CTX }); } catch (e) { res = { status:'error', text:e.message }; }
       fill(d, res); if (res.status === 'ok') LOG.push({ model:m, round:ROUND, text:res.text });
     }));
+    await fetchAsked(from);
   } finally { $('send').disabled = false; $('go').disabled = false; $('reply').value = ''; $('moreCode').value = ''; }
 };
 $('copy').onclick = async () => {
