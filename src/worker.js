@@ -8,7 +8,7 @@
 const SYSTEM = 'אתה חבר במועצת AI שדנה בגלוי בשאלה של המשתמש, יחד עם שני מודלים אחרים. ענה בעברית, בצורה ממוקדת ומעשית. ' +
   'בסבב הראשון הצע תשובה או תוכנית משלך. בסבבים הבאים קרא את מה שכתבו האחרים, ציין במפורש במה אתה מסכים ובמה לא ולמה, ושפר. ' +
   'אל תעמיד פנים שביצעת פעולות שלא ביצעת, ואל תמציא עובדות; אם אינך בטוח — אמור זאת.';
-const NAMES = { openai: 'ChatGPT', claude: 'Claude', gemini: 'Gemini' };
+const NAMES = { openai: 'ChatGPT', claude: 'Claude', gemini: 'Gemini' }, WHO = { ...NAMES, user: 'המשתמש' };
 const MAX_TOKENS = 1200, MAX_TASK = 12000, MAX_HIST_EACH = 4000;
 
 const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -30,9 +30,10 @@ function keyOf(env, m) { const k = m === 'openai' ? env.OPENAI_API_KEY : m === '
 
 function promptOf(b) {
   const task = String(b.task || '').slice(0, MAX_TASK), round = Math.max(1, Math.min(4, +b.round || 1)), rounds = Math.max(1, Math.min(4, +b.rounds || 3));
-  const hist = (Array.isArray(b.history) ? b.history : []).filter(h => h && h.text).slice(-12)
-    .map(h => `— ${NAMES[h.model] || h.model} (סבב ${+h.round || '?'}):\n${String(h.text).slice(0, MAX_HIST_EACH)}`).join('\n\n');
+  const hist = (Array.isArray(b.history) ? b.history : []).filter(h => h && h.text).slice(-16)
+    .map(h => `— ${WHO[h.model] || h.model}${h.model === 'user' ? '' : ' (סבב ' + (+h.round || '?') + ')'}:\n${String(h.text).slice(0, MAX_HIST_EACH)}`).join('\n\n');
   if (b.summary) return `שאלת המשתמש:\n${task}\n\nזה הדיון המלא של המועצה:\n\n${hist}\n\nכתוב עכשיו סיכום קצר וברור למשתמש: על מה הסכימו, מה נשאר במחלוקת, ומה ההמלצה הסופית. אל תוסיף דעות חדשות שלא עלו בדיון.`;
+  if (b.reply) return `שאלת המשתמש:\n${task}\n\nזה הדיון עד עכשיו:\n\n${hist}\n\nהמשתמש הגיב עכשיו לדיון:\n${String(b.reply).slice(0, 6000)}\n\nהתייחס ישירות לתגובה שלו: ענה על מה ששאל, עדכן את ההמלצה שלך אם צריך, והתייחס גם לדברי האחרים כשזה רלוונטי.`;
   if (round === 1) return `שאלת המשתמש:\n${task}\n\nזה הסבב הראשון מתוך ${rounds}. הצע את התשובה או התוכנית שלך.`;
   return `שאלת המשתמש:\n${task}\n\nזה סבב ${round} מתוך ${rounds}. אלה הדברים שנאמרו עד עכשיו:\n\n${hist}\n\nהתייחס לדברי האחרים: במה אתה מסכים, במה לא ולמה. אחר כך כתוב את הגרסה המשופרת שלך.${round === rounds ? ' זה הסבב האחרון — סיים בהמלצה ברורה.' : ''}`;
 }
@@ -40,7 +41,7 @@ function promptOf(b) {
 // a busy model (429/5xx) is asked again after a short wait; Gemini then falls back to a lighter model (GEMINI_FALLBACK)
 async function call(env, m, prompt) {
   let res; for (const wait of [0, 2500, 6000]) { if (wait) await new Promise(r => setTimeout(r, wait)); res = await call1(env, m, prompt, null); if (!res.busy) return res; }
-  if (m === 'gemini') { const fb = env.GEMINI_FALLBACK || 'gemini-3.5-flash'; if (fb !== modelOf(env, m)) { const r2 = await call1(env, m, prompt, fb); if (!r2.busy) return r2; res = r2; } }
+  if (m === 'gemini') for (const fb of String(env.GEMINI_FALLBACK || 'gemini-3.5-flash-lite,gemini-3.1-flash-lite').split(',').map(x => x.trim()).filter(Boolean)) { if (fb === modelOf(env, m)) continue; const r2 = await call1(env, m, prompt, fb); if (!r2.busy) return r2; res = r2; }
   return { status: 'error', text: NAMES[m] + ' לא ענה גם אחרי כמה ניסיונות. ההודעה האחרונה: ' + res.text };
 }
 async function call1(env, m, prompt, modelOverride) {
