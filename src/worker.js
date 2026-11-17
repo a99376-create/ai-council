@@ -81,7 +81,7 @@ export default {
     if (tooMany(req.headers.get('cf-connecting-ip') || '?')) return json({ error: 'יותר מדי בקשות — נסו שוב בעוד דקה' }, 429);
     if (!(await okPassword(req, env))) return json({ error: env.COUNCIL_PASSWORD ? 'סיסמה שגויה' : 'עוד לא הוגדרה סיסמה למערכת' }, 401);
     const b = await req.json().catch(() => ({}));
-    if (u.pathname === '/api/status') return json({ models: Object.keys(NAMES).map(m => ({ id: m, name: NAMES[m], ready: !!keyOf(env, m), model: modelOf(env, m) })) });
+    if (u.pathname === '/api/status') return json({ models: Object.keys(NAMES).map(m => ({ id: m, name: NAMES[m], ready: !!keyOf(env, m), model: modelOf(env, m), keyShape: keyOf(env, m) ? keyOf(env, m).slice(0, 10) + '… (' + keyOf(env, m).length + ')' : '' })) });
     if (u.pathname === '/api/ask') {
       if (!NAMES[b.model]) return json({ error: 'מודל לא מוכר' }, 400);
       if (String(b.task || '').trim().length < 3) return json({ error: 'השאלה קצרה מדי' }, 400);
